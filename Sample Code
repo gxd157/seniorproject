@@ -2,23 +2,25 @@ import cv2
 import torch
 from ultralytics import YOLO
 
-
 # Load the YOLOv8 pre-trained model
 model = YOLO("yolov8n.pt")  # Using a lightweight model for real-time performance
 
-
-# Open webcam (0 for default camera, change to 1 or other for external)
+# Open webcam
 cap = cv2.VideoCapture(0)
 
-
-# Set frame size (optional for better performance)
+# Set frame size
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
 
 # Initialize people counter
 people_count = 0
 
+# Define the x-coordinate of the vertical line (doorway)
+doorway_x = 320  # Midpoint of the frame
+
+# Dictionary to track object movement
+tracked_objects = {}
+thresh_distance = 50  # Threshold distance to avoid multiple counts
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -26,14 +28,14 @@ while cap.isOpened():
         print("Failed to grab frame")
         break
 
-
     # Run YOLOv8 model on the frame
     results = model(frame)
 
+    # Draw the doorway line
+    cv2.line(frame, (doorway_x, 0), (doorway_x, 480), (0, 0, 255), 2)
 
-    # Reset people counter for each frame
-    people_count = 0
-
+    # Temporary storage for this frame’s detections
+    new_objects = {}
 
     # Loop through detections
     for r in results:
@@ -41,31 +43,53 @@ while cap.isOpened():
             cls = int(box.cls[0])  # Class ID
             conf = float(box.conf[0])  # Confidence Score
             x1, y1, x2, y2 = map(int, box.xyxy[0])  # Bounding Box Coordinates
-
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
 
             # Check if detected object is a person (class 0 in COCO dataset)
             if cls == 0:
-                # Increment people counter
-                people_count += 1
+                # Determine if this is a known person
+                closest_id = None
+                min_distance = thresh_distance
 
+                for obj_id, (prev_x, prev_y) in tracked_objects.items():
+                    distance = abs(center_x - prev_x) + abs(center_y - prev_y)
+                    if distance < min_distance:
+                        min_distance = distance
+                        closest_id = obj_id
+
+                if closest_id is None:
+                    # Assign a new ID to this person
+                    new_id = len(tracked_objects) + 1
+                    tracked_objects[new_id] = (center_x, center_y)
+                    new_objects[new_id] = (center_x, center_y)
+                else:
+                    # Update existing object position
+                    prev_x, _ = tracked_objects[closest_id]
+                    new_objects[closest_id] = (center_x, center_y)
+                    
+                    # Check if the person has crossed the doorway
+                    if prev_x < doorway_x and center_x >= doorway_x:
+                        people_count += 1  # Entering the area (left to right)
+                    elif prev_x >= doorway_x and center_x < doorway_x:
+                        people_count -= 1  # Exiting the area (right to left)
 
                 # Draw bounding box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(frame, f'Human {conf:.2f}', (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-
+    # Update tracked objects
+    tracked_objects = new_objects
+    
     # Display people counter on screen
     cv2.putText(frame, f'People Count: {people_count}', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-
     # Show the output frame
-    cv2.imshow("Human Detection", frame)
-
+    cv2.imshow("Human Detection & Counting", frame)
 
     # Press 'q' to quit
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
-
 
 cap.release()
 cv2.destroyAllWindows()
