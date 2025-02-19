@@ -1,0 +1,93 @@
+import cv2
+import numpy as np
+from ultralytics import YOLO
+from deep_sort_realtime.deepsort_tracker import DeepSort
+
+# Load YOLOv8 model
+model = YOLO("yolov8n.pt")
+
+# Initialize DeepSORT Tracker
+tracker = DeepSort(max_age=30)
+
+# Video capture
+cap = cv2.VideoCapture(1)
+
+# Get frame dimensions & middle separation line
+frame_height = int(cap.get(4))
+middle_y = frame_height // 2  # Horizontal middle line
+
+# Tracking movement
+tracking_data = {}  # {ID: [initial_y, last_y]}
+enter_count, exit_count = 0, 0
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    results = model(frame)  # Run YOLO detection
+    detections = []
+
+    # Process YOLO detections
+    for result in results:
+        for box, cls, conf in zip(result.boxes.xyxy, result.boxes.cls, result.boxes.conf):
+            x1, y1, x2, y2 = map(int, box[:4])
+            confidence = float(conf)
+            class_id = int(cls)
+
+            # Only track people (class ID 0)
+            if confidence > 0.5 and class_id == 0:
+                detections.append(([x1, y1, x2, y2], confidence, "person"))
+
+    # Run DeepSORT tracker
+    tracks = tracker.update_tracks(detections, frame=frame)
+
+    for track in tracks:
+        if not track.is_confirmed():
+            continue
+
+        track_id = track.track_id
+        x1, y1, x2, y2 = map(int, track.to_tlbr())  # Get exact bounding box from DeepSORT
+
+        centroid_x = (x1 + x2) // 2  # Center X coordinate
+        centroid_y = (y1 + y2) // 2  # Center Y coordinate
+
+        # Draw bounding box for tracked persons
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)  
+        cv2.putText(frame, f"ID {track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
+        # Store initial position for new IDs
+        if track_id not in tracking_data:
+            tracking_data[track_id] = [centroid_y, centroid_y]  # Store initial Y position
+        else:
+            tracking_data[track_id][1] = centroid_y  # Update last Y position
+
+    # Analyze movement only when a person fully crosses the middle line
+    for track_id, (start_y, last_y) in list(tracking_data.items()):
+        if abs(last_y - start_y) < 30:  # Ignore small shifts
+            continue
+
+        if start_y < middle_y and last_y > middle_y:  # Moving Down -> Exiting
+            exit_count += 1
+            del tracking_data[track_id]
+        elif start_y > middle_y and last_y < middle_y:  # Moving Up -> Entering
+            enter_count += 1
+            del tracking_data[track_id]
+
+    # Draw middle horizontal line
+    cv2.line(frame, (0, middle_y), (frame.shape[1], middle_y), (255, 0, 0), 2)  # Horizontal line
+
+    # Resize frame for larger display
+    frame = cv2.resize(frame, (1280, 720))  # Resize display to 1280x720
+
+    # Display count statistics (smaller size)
+    cv2.putText(frame, f"Entered: {enter_count}", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)  
+    cv2.putText(frame, f"Exited: {exit_count}", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)  
+
+    cv2.imshow("Occupancy Counter", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
