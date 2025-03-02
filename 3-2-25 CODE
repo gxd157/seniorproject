@@ -1,0 +1,153 @@
+import cv2
+import numpy as np
+import tkinter as tk
+from tkinter import messagebox
+from PIL import Image, ImageTk
+from ultralytics import YOLO
+from deep_sort_realtime.deepsort_tracker import DeepSort
+
+# Load YOLOv8 model
+model = YOLO("yolov8n.pt")
+
+# Initialize DeepSORT Tracker
+tracker = DeepSort(max_age=30)
+
+# Video capture
+cap = cv2.VideoCapture(0)
+
+# Get frame dimensions & middle separation line
+frame_height = int(cap.get(4))
+middle_y = frame_height // 2
+
+# Tracking movement
+tracking_data = {}
+enter_count, exit_count = 0, 0
+
+CROSSING_THRESHOLD = 50
+MAX_LOST_FRAMES = 30
+OCCUPANCY_LIMIT = 50  # Set occupancy limit
+
+# Flag to stop execution
+running = True
+
+# GUI Setup
+root = tk.Tk()
+root.title("Occupancy Monitoring System")
+
+# Create label for displaying occupancy count
+occupancy_label = tk.Label(root, text="People Inside: 0", font=("Arial", 16))
+occupancy_label.pack(pady=10)
+
+# Create label to show the video feed
+video_label = tk.Label(root)
+video_label.pack()
+
+def stop_application():
+    """Stops the application gracefully."""
+    global running
+    running = False  # Stop the loop
+    cap.release()
+    cv2.destroyAllWindows()
+    root.quit()  # Close Tkinter
+
+# Stop Button (Ensure "STOP" is always displayed)
+stop_button = tk.Button(root, text="STOP", font=("Arial", 14, "bold"), bg="red", fg="white", width=10, height=2, command=stop_application)
+stop_button.pack(pady=10)
+
+# Force UI update to ensure button renders correctly
+root.update_idletasks()  # Force the button to render properly with text
+
+def update_ui():
+    """Update the GUI with the current occupancy count."""
+    current_occupancy = max(0, enter_count - exit_count)
+    occupancy_label.config(text=f"People Inside: {current_occupancy}")
+    
+    if current_occupancy >= OCCUPANCY_LIMIT:
+        messagebox.showwarning("Occupancy Limit Reached", "Maximum capacity reached!")
+
+def process_frame():
+    """Process the video frame, detect people, update tracking, and display in Tkinter."""
+    global running, enter_count, exit_count
+
+    if not running:
+        return
+
+    ret, frame = cap.read()
+    if not ret:
+        return
+
+    results = model(frame)
+    detections = []
+
+    for result in results:
+        boxes = result.boxes.xyxy.cpu().numpy()
+        confidences = result.boxes.conf.cpu().numpy()
+        class_ids = result.boxes.cls.cpu().numpy().astype(int)
+
+        for box, conf, cls in zip(boxes, confidences, class_ids):
+            x1, y1, x2, y2 = map(int, box[:4])
+            confidence = float(conf)
+
+            if confidence > 0.7 and cls == 0:
+                detections.append(([x1, y1, x2, y2], confidence, "person"))
+
+    tracks = tracker.update_tracks(detections, frame=frame)
+    active_ids = set()
+
+    for track in tracks:
+        if not track.is_confirmed():
+            continue
+
+        track_id = track.track_id
+        active_ids.add(track_id)
+        x1, y1, x2, y2 = map(int, track.to_tlbr())
+        centroid_y = (y1 + y2) // 2
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(frame, f"ID {track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
+        if track_id not in tracking_data:
+            tracking_data[track_id] = [centroid_y, centroid_y, 0]
+        else:
+            tracking_data[track_id][1] = centroid_y
+            tracking_data[track_id][2] = 0
+
+    for track_id, (start_y, last_y, frames_since_update) in list(tracking_data.items()):
+        if abs(last_y - start_y) < 50:
+            continue
+
+        if start_y < middle_y and last_y > middle_y + CROSSING_THRESHOLD:
+            exit_count += 1
+            del tracking_data[track_id]
+        elif start_y > middle_y and last_y < middle_y - CROSSING_THRESHOLD:
+            enter_count += 1
+            del tracking_data[track_id]
+        else:
+            tracking_data[track_id][2] += 1
+
+    for track_id in list(tracking_data.keys()):
+        if tracking_data[track_id][2] > MAX_LOST_FRAMES:
+            del tracking_data[track_id]
+
+    # Draw middle line and display occupancy count
+    cv2.line(frame, (0, middle_y), (frame.shape[1], middle_y), (255, 0, 0), 2)
+    frame = cv2.resize(frame, (640, 480))  # Resize for Tkinter display
+    cv2.putText(frame, f"People Inside: {max(0, enter_count - exit_count)}", (50, 50), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    # Convert frame to RGB for Tkinter
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    img = Image.fromarray(frame)
+    imgtk = ImageTk.PhotoImage(image=img)
+
+    video_label.imgtk = imgtk
+    video_label.configure(image=imgtk)
+
+    update_ui()
+    root.after(10, process_frame)  # Run the function again after 10ms
+
+# Start processing frames
+process_frame()
+
+# Run the Tkinter main loop
+root.mainloop()
