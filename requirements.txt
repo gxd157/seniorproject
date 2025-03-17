@@ -1,0 +1,7 @@
+opencv-python==4.5.5.64
+torch==2.0.1
+ultralytics==8.0.100
+Pillow==9.4.0
+deep-sort-realtime==0.0.10
+tkintertable==1.3.3
+datetime==5.1
