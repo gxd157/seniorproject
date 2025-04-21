@@ -176,17 +176,17 @@ def process_frame():
             if confidence > 0.7 and cls == 0:
                 detections.append(([x1, y1, x2, y2], confidence, "person"))
 
-    tracks = tracker.update_tracks(detections, frame=frame)
-    active_ids = set()
+    tracks = tracker.update_tracks(detections, frame=frame) #Calling tracking algorithm DeepSort 
+    active_ids = set() #Storing all actively tracked IDs in a set so no IDs are being counted multiple times
 
     for track in tracks:
         if not track.is_confirmed():
-            continue
+            continue #Makes sure that only confirmed Humans are being tracked, sometimes the algorithm needs a few frames to confirm the detection is indeed a human
 
         track_id = track.track_id
         active_ids.add(track_id)
         x1, y1, x2, y2 = map(int, track.to_tlbr())
-        centroid_y = (y1 + y2) // 2
+        centroid_y = (y1 + y2) // 2 #Gives each confirmed track a bounding box calculating a vertical center for each bounding box
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(frame, f"ID {track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
@@ -198,8 +198,8 @@ def process_frame():
             tracking_data[track_id][2] = 0
 
     for track_id, (start_y, last_y, frames_since_update) in list(tracking_data.items()):
-        if abs(last_y - start_y) < 50:
-            continue
+        if abs(last_y - start_y) < 50: #This handles the cases where someone moves an insignificant amount --> will not count as enter or exit if movement is less than 50 pixels
+            continue #Skip rest of the loop for this track_id
 
         if start_y < middle_y and last_y > middle_y + CROSSING_THRESHOLD: #Y-coordinates in CV increase going downward top of frame y=0 and bottom y=max
             exit_count += 1 #Moving downward, counted as an exit, y increases because middle_y + last updated y is greater than starting y
@@ -229,3 +229,4 @@ def process_frame():
 
 process_frame()
 root.mainloop()
+
