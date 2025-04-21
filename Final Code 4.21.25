@@ -16,16 +16,16 @@ tracker = DeepSort(max_age=30)
 #Video capture
 cap = cv2.VideoCapture(0)
 
-#Get frame dimensions & middle separation line
+#Get frame dimensions and middle separation line
 frame_height = int(cap.get(4))
 middle_y = frame_height // 2
 
 #Tracking movement
 tracking_data = {}
-enter_count, exit_count, total_entered_count = 0, 0, 0  # Total entered count added
+enter_count, exit_count, total_entered_count = 0, 0, 0 #Total entered count added
 
-CROSSING_THRESHOLD = 50 # Sets the minimum vertical distance (50 pixels) --> makes sure the person fully crosses
-MAX_LOST_FRAMES = 30 # Number of frames a tracked person can be missing before discarding their ID from 
+CROSSING_THRESHOLD = 50 #Sets the minimum vertical distance (50 pixels) --> makes sure the person fully crosses
+MAX_LOST_FRAMES = 30 #Number of frames a tracked person can be missing before discarding their ID from 
 OCCUPANCY_LIMIT = 5  #Set occupancy limit
 warning_shown = False  #Prevents warning showing every single frame
 
@@ -38,7 +38,7 @@ root.title("Occupancy Monitoring System") #Naming the GUI window
 
 root.minsize(800, 600) #Ensures that the buttons will always be shown
 
-# Create labels for displaying counts
+#Create labels for displaying counts
 occupancy_label = tk.Label(root, text="People Inside: 0", font=("Arial", 16)) #Label on livefeed for number of people inside
 occupancy_label.pack(pady=5) #Gives the label space or "padding" between another label
 
@@ -65,7 +65,7 @@ def log_occupancy(track_id, direction, confidence): #Function is called everytim
     current_occupancy = max(0, enter_count - exit_count) #Ensures that the number of people inside never goes into the negatives
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") #Logs timestamp in Y/M/D, H/M/S fashion for business trends
     occupancy_log.append({"timestamp": timestamp, "ID": track_id, "Direction": direction, "Confidence": confidence, "occupancy": current_occupancy, "total_entered": total_entered_count}) #Any data collected will be stored here in an occupancy log
-
+#Occupancy warning
 def show_capacity_warning():
     """Show a non-blocking warning when the occupancy limit is reached."""
     global warning_shown #Gets access from previously defined global variable warning_shown = False
@@ -98,7 +98,7 @@ def update_ui(): #Defines a function that will update the UI whenever the count 
 
     if current_occupancy >= OCCUPANCY_LIMIT: #Shows the warning when the occupancy limit is reached or exceeded
         show_capacity_warning()
-
+#Export Data Button
 def export_occupancy_data(): #Function that sends all the occupancy data collected in the list to a csv file, stores all data until export is clicked so the processing isn't slowed
     """Export the occupancy data to a CSV file."""
     with open("occupancy_data.csv", mode="w", newline="") as file:
@@ -150,7 +150,7 @@ def set_occupancy_limit():
 set_limit_button = tk.Button(root, text="Set Occupancy Limit", font=("Arial", 12), bg="purple", fg="white", width=15, height=2, command=set_occupancy_limit)
 set_limit_button.pack(pady=5) 
 
-def process_frame():
+def process_frame(): #Process a single video frame, detect people, update their tracking status
     """Process the video frame, detect people, update tracking, and display in Tkinter."""
     global running, enter_count, exit_count, total_entered_count
 
@@ -161,10 +161,10 @@ def process_frame():
     if not ret:
         return
 
-    results = model(frame)
-    detections = []
+    results = model(frame) #Running the frame through pretrained YOLOv8 for object detection
+    detections = [] #Stores all detections in this list with the relevent data we want
 
-    for result in results:
+    for result in results: #This loops for every detection applying a bounding box, confidence score, and unique ID
         boxes = result.boxes.xyxy.cpu().numpy()
         confidences = result.boxes.conf.cpu().numpy()
         class_ids = result.boxes.cls.cpu().numpy().astype(int)
