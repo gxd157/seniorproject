@@ -1,0 +1,231 @@
+import cv2
+import tkinter as tk
+from tkinter import messagebox, simpledialog
+from PIL import Image, ImageTk
+from ultralytics import YOLO
+from deep_sort_realtime.deepsort_tracker import DeepSort
+import csv
+from datetime import datetime
+
+#Load YOLOv8 model
+model = YOLO("yolov8n.pt")
+
+#Initialize DeepSORT Tracker
+tracker = DeepSort(max_age=30)
+
+#Video capture
+cap = cv2.VideoCapture(0)
+
+#Get frame dimensions & middle separation line
+frame_height = int(cap.get(4))
+middle_y = frame_height // 2
+
+#Tracking movement
+tracking_data = {}
+enter_count, exit_count, total_entered_count = 0, 0, 0  # Total entered count added
+
+CROSSING_THRESHOLD = 50 # Sets the minimum vertical distance (50 pixels) --> makes sure the person fully crosses
+MAX_LOST_FRAMES = 30 # Number of frames a tracked person can be missing before discarding their ID from 
+OCCUPANCY_LIMIT = 5  #Set occupancy limit
+warning_shown = False  #Prevents warning showing every single frame
+
+running = True #Gathering video feed until the stop button is pushed acts as mainloop on/off switch
+
+occupancy_log = [] #List for our occupancy data will be exported only when the "export" button is pushed
+
+root = tk.Tk() #GUI setup using Tkinter, stanbard python GUI library
+root.title("Occupancy Monitoring System") #Naming the GUI window
+
+root.minsize(800, 600) #Ensures that the buttons will always be shown
+
+# Create labels for displaying counts
+occupancy_label = tk.Label(root, text="People Inside: 0", font=("Arial", 16)) #Label on livefeed for number of people inside
+occupancy_label.pack(pady=5) #Gives the label space or "padding" between another label
+
+total_entered_label = tk.Label(root, text="Total Entered: 0", font=("Arial", 16)) #Label on livefeed for total number of people that have entered
+total_entered_label.pack(pady=5) #Gives the label space or "padding" between another label
+
+video_label = tk.Label(root) #Gives the livefeed what the camera sees
+video_label.pack()
+
+def stop_application(): #This is used to stop the application, global running allows us to modify the earlier defined running variable, releases webcam, closed all windows and exits mainloop
+    """Stops the application gracefully."""
+    global running
+    running = False
+    cap.release()
+    cv2.destroyAllWindows()
+    root.quit()
+
+#Stop Button
+stop_button = tk.Button(root, text="STOP", font=("Arial", 14, "bold"), bg="red", fg="white", width=10, height=2, command=stop_application)
+stop_button.pack(pady=5)
+
+def log_occupancy(track_id, direction, confidence): #Function is called everytime someone enters or exits, logs their ID, Direction, and Confidence
+    """Log occupancy changes to a CSV log."""
+    current_occupancy = max(0, enter_count - exit_count) #Ensures that the number of people inside never goes into the negatives
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S") #Logs timestamp in Y/M/D, H/M/S fashion for business trends
+    occupancy_log.append({"timestamp": timestamp, "ID": track_id, "Direction": direction, "Confidence": confidence, "occupancy": current_occupancy, "total_entered": total_entered_count}) #Any data collected will be stored here in an occupancy log
+
+def show_capacity_warning():
+    """Show a non-blocking warning when the occupancy limit is reached."""
+    global warning_shown #Gets access from previously defined global variable warning_shown = False
+
+    if not warning_shown: #Checks to make sure no pop-ups are currently active
+        warning_shown = True #Creates the child pop-up window
+        warning_window = tk.Toplevel(root) #Top level is commonly used in Tkinter for child windows
+        warning_window.title("Warning") #Giving the child window a title
+        warning_window.geometry("300x100") #Set size of child window
+        warning_window.resizable(False, False) #No resizing ensures pop-up is always the same size 
+
+        label = tk.Label(warning_window, text="Maximum capacity reached!", font=("Arial", 14), fg="red")
+        label.pack(pady=10) 
+
+        def dismiss_warning(): #Allows the user to click "OK" on the pop-up, once clicked the function will run again to ensure occupancy limit is still being met
+            global warning_shown
+            warning_shown = False
+            warning_window.destroy()
+
+        dismiss_button = tk.Button(warning_window, text="OK", font=("Arial", 12), command=dismiss_warning)
+        dismiss_button.pack(pady=5)
+
+        warning_window.protocol("WM_DELETE_WINDOW", dismiss_warning) #Allows the red closeout button to function the same as clicking "OK" 
+
+def update_ui(): #Defines a function that will update the UI whenever the count changes and triggers the warning if necessary
+    """Update the GUI with the current occupancy count."""
+    current_occupancy = max(0, enter_count - exit_count) #Makes sure the occupancy count does not go into the negatives, takes enter - exit to get number of people inside
+    occupancy_label.config(text=f"People Inside: {current_occupancy}") 
+    total_entered_label.config(text=f"Total Entered: {total_entered_count}") #Running total of customers 
+
+    if current_occupancy >= OCCUPANCY_LIMIT: #Shows the warning when the occupancy limit is reached or exceeded
+        show_capacity_warning()
+
+def export_occupancy_data(): #Function that sends all the occupancy data collected in the list to a csv file, stores all data until export is clicked so the processing isn't slowed
+    """Export the occupancy data to a CSV file."""
+    with open("occupancy_data.csv", mode="w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["Timestamp", "ID", "Direction", "Confidence", "Occupancy Count", "Total Entered"])
+        for entry in occupancy_log:
+            writer.writerow([entry["timestamp"], entry["ID"], entry["Direction"], entry["Confidence"], entry["occupancy"], entry["total_entered"]])
+
+def export_data():
+    """Trigger the export of occupancy data."""
+    export_occupancy_data()
+    messagebox.showinfo("Export Successful", "Occupancy data has been exported to occupancy_data.csv")
+
+export_button = tk.Button(root, text="Export Data", font=("Arial", 14, "bold"), bg="blue", fg="white", width=15, height=2, command=export_data)
+export_button.pack(pady=5)
+
+#Buttons to manually adjust count
+def increase_count():
+    """Manually increase the occupancy count."""
+    global enter_count, total_entered_count
+    enter_count += 1
+    total_entered_count += 1  # Increase total entered count
+    log_occupancy("Manual", "Entered", "N/A")
+    update_ui()
+
+def decrease_count():
+    """Manually decrease the occupancy count."""
+    global exit_count
+    if enter_count - exit_count > 0:
+        exit_count += 1
+        log_occupancy("Manual", "Exited", "N/A")
+        update_ui()
+
+increase_button = tk.Button(root, text="Increase Count", font=("Arial", 12), bg="green", fg="white", width=15, height=2, command=increase_count)
+increase_button.pack(pady=5)
+
+decrease_button = tk.Button(root, text="Decrease Count", font=("Arial", 12), bg="orange", fg="white", width=15, height=2, command=decrease_count)
+decrease_button.pack(pady=5)
+
+#Button to manually set the occupancy limit from the UI
+def set_occupancy_limit():
+    """Set the occupancy limit from the user interface."""
+    global OCCUPANCY_LIMIT
+    new_limit = simpledialog.askinteger("Set Occupancy Limit", "Enter the new occupancy limit:", minvalue=1, maxvalue=100)
+    if new_limit:
+        OCCUPANCY_LIMIT = new_limit
+        messagebox.showinfo("Occupancy Limit Updated", f"Occupancy limit set to {OCCUPANCY_LIMIT}")
+
+set_limit_button = tk.Button(root, text="Set Occupancy Limit", font=("Arial", 12), bg="purple", fg="white", width=15, height=2, command=set_occupancy_limit)
+set_limit_button.pack(pady=5) 
+
+def process_frame():
+    """Process the video frame, detect people, update tracking, and display in Tkinter."""
+    global running, enter_count, exit_count, total_entered_count
+
+    if not running:
+        return
+
+    ret, frame = cap.read()
+    if not ret:
+        return
+
+    results = model(frame)
+    detections = []
+
+    for result in results:
+        boxes = result.boxes.xyxy.cpu().numpy()
+        confidences = result.boxes.conf.cpu().numpy()
+        class_ids = result.boxes.cls.cpu().numpy().astype(int)
+
+        for box, conf, cls in zip(boxes, confidences, class_ids):
+            x1, y1, x2, y2 = map(int, box[:4])
+            confidence = float(conf)
+
+            if confidence > 0.7 and cls == 0:
+                detections.append(([x1, y1, x2, y2], confidence, "person"))
+
+    tracks = tracker.update_tracks(detections, frame=frame)
+    active_ids = set()
+
+    for track in tracks:
+        if not track.is_confirmed():
+            continue
+
+        track_id = track.track_id
+        active_ids.add(track_id)
+        x1, y1, x2, y2 = map(int, track.to_tlbr())
+        centroid_y = (y1 + y2) // 2
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(frame, f"ID {track_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+
+        if track_id not in tracking_data:
+            tracking_data[track_id] = [centroid_y, centroid_y, 0]
+        else:
+            tracking_data[track_id][1] = centroid_y
+            tracking_data[track_id][2] = 0
+
+    for track_id, (start_y, last_y, frames_since_update) in list(tracking_data.items()):
+        if abs(last_y - start_y) < 50:
+            continue
+
+        if start_y < middle_y and last_y > middle_y + CROSSING_THRESHOLD: #Y-coordinates in CV increase going downward top of frame y=0 and bottom y=max
+            exit_count += 1 #Moving downward, counted as an exit, y increases because middle_y + last updated y is greater than starting y
+            log_occupancy(track_id, "Exited", detections[0][1] if detections else "N/A")
+            del tracking_data[track_id]
+        elif start_y > middle_y and last_y < middle_y - CROSSING_THRESHOLD:
+            enter_count += 1 #Moving upward, counted as enter, y decreases because middle_y + last updated y is less than starting y
+            total_entered_count += 1  #Increase total entered count
+            log_occupancy(track_id, "Entered", detections[0][1] if detections else "N/A")
+            del tracking_data[track_id] #Removes person from the tracking data because they have already been stored and counted
+        else:
+            tracking_data[track_id][2] += 1
+
+    # Draw middle line
+    cv2.line(frame, (0, middle_y), (frame.shape[1], middle_y), (255, 0, 0), 2)
+    frame = cv2.resize(frame, (640, 480))
+
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    img = Image.fromarray(frame)
+    imgtk = ImageTk.PhotoImage(image=img)
+
+    video_label.imgtk = imgtk
+    video_label.configure(image=imgtk)
+
+    update_ui()
+    root.after(10, process_frame)
+
+process_frame()
+root.mainloop()
